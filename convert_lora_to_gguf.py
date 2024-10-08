@@ -335,47 +335,37 @@ if __name__ == '__main__':
                 # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
                 return ()
 
-            def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
-                tensor_map: dict[str, PartialLoraTensor] = {}
+			def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
+				tensor_map: dict[str, PartialLoraTensor] = {}
 
-                # The following edits will enable conversion for: SFTTrainer checkpoint adapter models and other adapter models that contain weights besides LoRA weights
+				for name, tensor in lora_model.items():
+					if ("lora_" in name) or (".base_layer.weight" in name):
+						if self.lazy:
+							tensor = LazyTorchTensor.from_eager(tensor)
+						base_name = get_base_tensor_name(name)
+						is_lora_a = ".lora_A.weight" in name
+						is_lora_b = ".lora_B.weight" in name
+						if not is_lora_a and not is_lora_b:
+							if ".base_layer.weight" in name:
+								continue
 
-                #  Here, we first get the items with the 'lora_' substring
-                lora_model_items_name = [name for name,_ in lora_model.items()]
-                lora_model_items_with_lora_tensors = [name for name in lora_model_items_name if 'lora_' in name]
+						if base_name in tensor_map:
+							if is_lora_a:
+								tensor_map[base_name].A = tensor
+							else:
+								tensor_map[base_name].B = tensor
+						else:
+							if is_lora_a:
+								tensor_map[base_name] = PartialLoraTensor(A=tensor)
+							else:
+								tensor_map[base_name] = PartialLoraTensor(B=tensor)
+					else:
+						pass                
 
-                for name, tensor in lora_model.items():
-
-                    # Check for only LoRA finetuned weights and base layer weights
-                    if (name in lora_model_items_with_lora_tensors) or (".base_layer.weight" in name):
-                        if self.lazy:
-                            tensor = LazyTorchTensor.from_eager(tensor)
-                        base_name = get_base_tensor_name(name)
-                        is_lora_a = ".lora_A.weight" in name
-                        is_lora_b = ".lora_B.weight" in name
-                        if not is_lora_a and not is_lora_b:
-                            if ".base_layer.weight" in name:
-                                continue
-
-                            # we will either have a lora weight or a base layer weight, this error becomes trivial
-                            # logger.error(f"Unexpected name '{name}': Not a lora_A or lora_B tensor")
-                            # sys.exit(1)
-
-                        if base_name in tensor_map:
-                            if is_lora_a:
-                                tensor_map[base_name].A = tensor
-                            else:
-                                tensor_map[base_name].B = tensor
-                        else:
-                            if is_lora_a:
-                                tensor_map[base_name] = PartialLoraTensor(A=tensor)
-                            else:
-                                tensor_map[base_name] = PartialLoraTensor(B=tensor)
-
-                for name, tensor in tensor_map.items():
-                    assert tensor.A is not None
-                    assert tensor.B is not None
-                    yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
+				for name, tensor in tensor_map.items():
+					assert tensor.A is not None
+					assert tensor.B is not None
+					yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
                 dest = list(super().modify_tensors(data_torch, name, bid))
